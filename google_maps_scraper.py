@@ -13,6 +13,7 @@ import random
 import re
 import sys
 import time
+import urllib.parse
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
@@ -26,7 +27,7 @@ from selenium.common.exceptions import (
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.keys import Keys  # mantido para compatibilidade futura
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -258,40 +259,38 @@ def scrape_google_maps(
 
     try:
         # ------------------------------------------------------------------ #
-        # 1. Abre Google Maps e pesquisa
+        # 1. Abre Google Maps com a busca diretamente na URL
         # ------------------------------------------------------------------ #
-        driver.get("https://www.google.com/maps")
-        random_sleep(2.0, 4.0)
+        encoded = urllib.parse.quote_plus(search_term)
+        maps_url = f"https://www.google.com/maps/search/{encoded}/"
+        logger.info("Abrindo URL: %s", maps_url)
+        driver.get(maps_url)
+        random_sleep(3.0, 5.0)
 
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 30)
 
         # Aceita cookies / aviso de consentimento (se aparecer)
         for consent_sel in [
             "button[aria-label='Aceitar tudo']",
             "button[aria-label='Accept all']",
+            "button[jsname='V67aGc']",
             "form:last-child button",
         ]:
             try:
-                btn = WebDriverWait(driver, 4).until(
+                btn = WebDriverWait(driver, 5).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, consent_sel))
                 )
                 btn.click()
-                random_sleep(1.0, 2.0)
+                logger.info("Consentimento aceito via: %s", consent_sel)
+                random_sleep(2.0, 3.0)
                 break
             except (TimeoutException, ElementNotInteractableException):
                 continue
 
-        # Campo de busca
-        search_box = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input#searchboxinput"))
-        )
-        search_box.clear()
-        for char in search_term:
-            search_box.send_keys(char)
-            time.sleep(random.uniform(0.03, 0.12))
-        random_sleep(0.5, 1.0)
-        search_box.send_keys(Keys.RETURN)
-        random_sleep(3.0, 5.0)
+        # Aguarda a página carregar verificando a URL atual
+        random_sleep(2.0, 4.0)
+        current_url = driver.current_url
+        logger.info("URL atual após carregamento: %s", current_url[:100])
 
         # ------------------------------------------------------------------ #
         # 2. Aguarda painel de resultados
@@ -300,11 +299,12 @@ def scrape_google_maps(
             "div[role='feed']",
             "div.m6QErb[aria-label]",
             ".DxyBCb",
+            "div.m6QErb",
         ]
         panel = None
         for sel in results_panel_selectors:
             try:
-                panel = WebDriverWait(driver, 12).until(
+                panel = WebDriverWait(driver, 15).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, sel))
                 )
                 logger.info("Painel de resultados encontrado com selector: %s", sel)
@@ -313,7 +313,11 @@ def scrape_google_maps(
                 continue
 
         if panel is None:
-            logger.warning("Painel de resultados não encontrado. Tentando continuar...")
+            logger.warning("Painel de resultados não encontrado.")
+            logger.debug("Título da página: %s", driver.title)
+            logger.debug("URL atual: %s", driver.current_url)
+            # Tenta coletar links diretos sem painel
+            logger.info("Tentando coletar links sem painel...")
 
         # ------------------------------------------------------------------ #
         # 3. Scroll para carregar mais resultados
